@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Register – World Chat</title>
+  <meta name="description" content="Create an account on World Chat – Real-time Global Chat Application" />
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌍</text></svg>" />
+</head>
+<body class="auth-body">
+<div class="auth-page">
+  <div class="auth-card glass">
+    <div class="auth-logo">
+      <span class="logo-icon">🌍</span>
+      <h1>World Chat</h1>
+      <p>Real-time Global Chat Application</p>
+    </div>
+
+    <div class="auth-form">
+      <h2>Create Account</h2>
+
+      <div class="error-msg" id="errorMsg"></div>
+      <div class="success-msg" id="successMsg"></div>
+
+      <form id="registerForm" novalidate>
+        <div class="form-group">
+          <label for="username">Username</label>
+          <input type="text" id="username" name="username" placeholder="YourUsername" required minlength="3" maxlength="30" autocomplete="username" />
+        </div>
+        <div class="form-group">
+          <label for="email">Email Address</label>
+          <input type="email" id="email" name="email" placeholder="you@example.com" required autocomplete="email" />
+        </div>
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password" placeholder="Min. 6 characters" required minlength="6" autocomplete="new-password" />
+        </div>
+        <div class="form-group">
+          <label for="confirm">Confirm Password</label>
+          <input type="password" id="confirm" name="confirm" placeholder="Repeat password" required autocomplete="new-password" />
+        </div>
+        <button type="submit" class="btn btn-primary" id="registerBtn">
+          <span>🚀</span> Create Account
+        </button>
+      </form>
+
+      <div class="auth-footer" style="margin-top:16px;">
+        Already have an account? <a href="/login">Sign in</a>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Fixed top-right theme toggle -->
+<button class="icon-btn" id="themeToggle" title="Toggle theme"
+  style="position:fixed;top:16px;right:16px;z-index:10;">🌙</button>
+
+<script>
+  // ─── Theme ────────────────────────────────────────────────────────
+  const saved = localStorage.getItem('wc_theme') || 'light';
+  document.documentElement.setAttribute('data-theme', saved);
+  document.getElementById('themeToggle').textContent = saved === 'dark' ? '☀️' : '🌙';
+
+  document.getElementById('themeToggle').addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme');
+    const next = current === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('wc_theme', next);
+    document.getElementById('themeToggle').textContent = next === 'dark' ? '☀️' : '🌙';
+  });
+
+  function showError(msg) {
+    const el = document.getElementById('errorMsg');
+    el.textContent = msg; el.classList.add('show');
+    document.getElementById('successMsg').classList.remove('show');
+  }
+  function showSuccess(msg) {
+    const el = document.getElementById('successMsg');
+    el.textContent = msg; el.classList.add('show');
+    document.getElementById('errorMsg').classList.remove('show');
+  }
+
+  document.getElementById('registerForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('registerBtn');
+    const username = document.getElementById('username').value.trim();
+    const email    = document.getElementById('email').value.trim();
+    const password = document.getElementById('password').value;
+    const confirm  = document.getElementById('confirm').value;
+
+    if (!/^[a-zA-Z0-9_]{3,30}$/.test(username)) {
+      return showError('❌ Username must be 3-30 alphanumeric characters or underscores.');
+    }
+    if (password.length < 6) return showError('❌ Password must be at least 6 characters.');
+    if (password !== confirm) return showError('❌ Passwords do not match.');
+
+    btn.disabled = true; btn.innerHTML = '⏳ Creating account…';
+
+    try {
+      const res = await fetch('/auth/register', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({username, email, password}),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Registration failed');
+
+      sessionStorage.setItem('wc_token', data.access_token);
+      sessionStorage.setItem('wc_user', JSON.stringify(data.user));
+      sessionStorage.removeItem('wc_guest');
+      showSuccess('✅ Account created! Redirecting…');
+      setTimeout(() => window.location.href = '/', 800);
+
+    } catch(err) {
+      showError('❌ ' + err.message);
+      btn.disabled = false; btn.innerHTML = '<span>🚀</span> Create Account';
+    }
+  });
+
+  // Redirect if already logged in
+  if (sessionStorage.getItem('wc_token') || sessionStorage.getItem('wc_guest')) {
+    window.location.href = '/';
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>World Chat – Live</title>
+  <meta name="description"
+    content="World Chat – Real-time Global Chat Application. Chat with people across the globe instantly." />
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <link rel="icon"
+    href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌍</text></svg>" />
+</head>
+
+<body>
+
+  <div class="chat-app">
+
+    <!-- ═══ HEADER ═══════════════════════════════════════════════════ -->
+    <header class="chat-header glass">
+      <div class="header-left">
+        <span class="header-logo">🌍</span>
+        <div class="header-title">
+          <h1>World Chat</h1>
+          <p>Real-time Global Chat</p>
+        </div>
+        <div class="online-indicator">
+          <div class="online-dot"></div>
+          <span id="onlineCount">0 online</span>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <div class="user-badge" id="userBadge">
+          <span id="badgeAvatar">👤</span>
+          <span id="badgeUsername">Connecting…</span>
+          <span class="role-tag guest" id="roleTag">guest</span>
+        </div>
+        <button class="icon-btn" id="themeToggle" title="Toggle theme">🌙</button>
+        <button class="icon-btn" id="logoutBtn" title="Logout / Leave">🚪</button>
+      </div>
+    </header>
+
+    <!-- ═══ CHAT BODY ═════════════════════════════════════════════════ -->
+    <div class="chat-body">
+
+      <!-- SIDEBAR -->
+      <aside class="sidebar">
+        <div class="sidebar-panel">
+          <div class="sidebar-title">👥 Online Users</div>
+          <ul class="user-list" id="userList">
+            <li class="user-list-item" style="color:var(--text-muted);font-size:0.78rem;">No users yet…</li>
+          </ul>
+        </div>
+      </aside>
+
+      <!-- MAIN CHAT -->
+      <main class="chat-main">
+        <!-- Messages -->
+        <div class="messages-container" id="messagesContainer">
+          <div style="text-align:center;color:var(--text-muted);font-size:0.82rem;padding:20px 0;">
+            🌊 Connecting to World Chat…
+          </div>
+        </div>
+
+        <!-- Typing indicator -->
+        <div class="typing-indicator" id="typingIndicator"></div>
+
+        <!-- Input -->
+        <div class="chat-input-area glass">
+          <div class="emoji-picker-container">
+            <button class="emoji-btn" id="emojiToggle" title="Emoji">😊</button>
+            <div class="emoji-picker" id="emojiPicker"></div>
+          </div>
+
+          <textarea id="messageInput" rows="1" placeholder="Type a message…" maxlength="2000"
+            autocomplete="off"></textarea>
+
+          <button class="send-btn" id="sendBtn" title="Send">
+            ➤
+          </button>
+        </div>
+      </main>
+
+    </div>
+  </div>
+
+  <!-- ═══ EDIT MODAL ══════════════════════════════════════════════════ -->
+  <div class="modal-overlay" id="editModal">
+    <div class="modal glass">
+      <h3>✏️ Edit Message</h3>
+      <textarea id="editTextarea" rows="3" maxlength="2000"></textarea>
+      <div class="modal-actions">
+        <button class="btn-sm cancel" id="editCancelBtn">Cancel</button>
+        <button class="btn-sm primary" id="editSaveBtn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ TOAST CONTAINER ══════════════════════════════════════════════ -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- ════════════════════════════════════════════════════════════════════
+     AUDIO (notification sound via AudioContext – no file needed)
+     ══════════════════════════════════════════════════════════════════ -->
+  <script>
+    /* ══════════════════════════════════════════════════════════════════
+       World Chat – Client Application
+       ══════════════════════════════════════════════════════════════════ */
+
+    // ─── State ────────────────────────────────────────────────────────
+    let currentUser = null;   // { id, username, role } or null for guest
+    let guestName = null;
+    let wsToken = null;
+    let ws = null;
+    let clientId = null;
+    let editingMsgId = null;
+    let typingTimer = null;
+    let isTyping = false;
+    let soundEnabled = true;
+    let audioCtx = null;
+
+    // ─── Constants (must be declared BEFORE init() IIFE) ─────────────
+    const EMOJIS = ['😀', '😂', '😍', '🥰', '😎', '🤔', '😮', '😢', '😡', '🤩',
+      '👍', '👎', '🙏', '👌', '✌️', '🤝', '🎉', '🔥', '❤️', '💯',
+      '🌍', '🌊', '⭐', '🚀', '💬', '🎵', '🍕', '☕', '🐱', '🐶',
+      '😴', '🤣', '😅', '🤓', '😱', '🥳', '🤯', '😇', '🥺', '🤗'];
+
+    const typingSet = new Set();
+    const typingClearTimers = {};
+
+    // ─── Init ─────────────────────────────────────────────────────────
+    (function init() {
+      applyTheme();
+
+      const tokenRaw = sessionStorage.getItem('wc_token');
+      const userRaw = sessionStorage.getItem('wc_user');
+      const guest = sessionStorage.getItem('wc_guest');
+
+      if (!tokenRaw && !guest) {
+        window.location.href = '/login';
+        return;
+      }
+
+      if (tokenRaw && userRaw) {
+        try {
+          currentUser = JSON.parse(userRaw);
+          wsToken = tokenRaw;
+        } catch (e) { sessionStorage.clear(); window.location.href = '/login'; return; }
+      } else if (guest) {
+        guestName = guest;
+      }
+
+      clientId = 'wc_' + Math.random().toString(36).substr(2, 12);
+      renderUserBadge();
+      buildEmojiPicker();
+      setupEventListeners();
+      connectWebSocket();
+      loadHistory();
+    })();
+
+    // ─── Theme ────────────────────────────────────────────────────────
+    function applyTheme() {
+      const saved = localStorage.getItem('wc_theme') || 'light';
+      document.documentElement.setAttribute('data-theme', saved);
+      document.getElementById('themeToggle').textContent = saved === 'dark' ? '☀️' : '🌙';
+    }
+
+    document.getElementById('themeToggle').addEventListener('click', () => {
+      const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('wc_theme', next);
+      document.getElementById('themeToggle').textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+
+    // ─── Render User Badge ────────────────────────────────────────────
+    function renderUserBadge() {
+      const username = currentUser ? currentUser.username : guestName;
+      const role = currentUser ? currentUser.role : 'guest';
+      document.getElementById('badgeUsername').textContent = username;
+      document.getElementById('badgeAvatar').textContent = role === 'admin' ? '👑' : role === 'user' ? '👤' : '🕶️';
+      const tag = document.getElementById('roleTag');
+      tag.textContent = role;
+      tag.className = `role-tag ${role}`;
+    }
+
+    // ─── Logout ───────────────────────────────────────────────────────
+    document.getElementById('logoutBtn').addEventListener('click', () => {
+      if (ws) ws.close();
+      sessionStorage.clear();
+      window.location.href = '/login';
+    });
+
+    // ─── WebSocket ────────────────────────────────────────────────────
+    function connectWebSocket() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      let url = `${proto}://${location.host}/ws/${clientId}`;
+      const params = new URLSearchParams();
+      if (wsToken) params.set('token', wsToken);
+      if (guestName) params.set('guest_name', guestName);
+      url += '?' + params.toString();
+
+      ws = new WebSocket(url);
+
+      ws.onopen = () => {
+        console.log('✅ WebSocket connected');
+      };
+
+      ws.onmessage = (e) => {
+        const payload = JSON.parse(e.data);
+        handleWSMessage(payload);
+      };
+
+      ws.onclose = () => {
+        console.warn('WebSocket closed. Reconnecting in 3s…');
+        setTimeout(connectWebSocket, 3000);
+      };
+
+      ws.onerror = (err) => console.error('WS error', err);
+    }
+
+    function handleWSMessage(payload) {
+      switch (payload.type) {
+        case 'new_message':
+          appendMessage(payload.data);
+          playNotification();
+          break;
+        case 'delete_message':
+          removeMessage(payload.data.id);
+          break;
+        case 'edit_message':
+          updateMessage(payload.data);
+          break;
+        case 'users_update':
+          renderUserList(payload.data.users);
+          break;
+        case 'typing':
+          showTyping(payload.data.username);
+          break;
+        case 'system':
+          appendSystemMessage(payload.data.message);
+          break;
+      }
+    }
+
+    // ─── Load History ─────────────────────────────────────────────────
+    async function loadHistory() {
+      try {
+        const res = await fetch('/messages');
+        if (!res.ok) return;
+        const messages = await res.json();
+        const container = document.getElementById('messagesContainer');
+        container.innerHTML = '';
+        if (messages.length === 0) {
+          container.innerHTML = '<div style="text-align:center;color:var(--text-muted);font-size:0.82rem;padding:20px 0;">🌊 Be the first to say hello!</div>';
+          return;
+        }
+        messages.forEach(m => appendMessage(m, false));
+        scrollToBottom();
+      } catch (e) {
+        console.error('Failed to load history', e);
+      }
+    }
+
+    // ─── Render Message ───────────────────────────────────────────────
+    function appendMessage(msg, animate = true) {
+      // Remove empty state
+      const container = document.getElementById('messagesContainer');
+      const emptyEl = container.querySelector('[data-empty]');
+      if (emptyEl) emptyEl.remove();
+
+      const myUsername = currentUser ? currentUser.username : guestName;
+      const myRole = currentUser ? currentUser.role : 'guest';
+      const isOwn = msg.username === myUsername;
+      const isAdmin = msg.is_admin;
+
+      const wrapper = document.createElement('div');
+      wrapper.className = `msg-wrapper ${isOwn ? 'own' : 'other'}`;
+      wrapper.dataset.id = msg.id;
+      if (!animate) wrapper.style.animation = 'none';
+
+      // Meta line
+      const meta = document.createElement('div');
+      meta.className = 'msg-meta';
+      meta.innerHTML = `
+    <span class="msg-username ${isAdmin ? 'admin-name' : ''}">${escHtml(msg.username)}</span>
+    ${isAdmin ? '<span title="Admin">👑</span>' : ''}
+    <span class="msg-time">${formatTime(msg.timestamp)}</span>
+  `;
+
+      // Card
+      const card = document.createElement('div');
+      let cardClass = 'msg-card';
+      if (isOwn) cardClass += ' own-card';
+      else cardClass += ' other-card';
+      if (isAdmin) cardClass += ' admin-card';
+      card.className = cardClass;
+      card.innerHTML = escHtml(msg.message).replace(/\n/g, '<br>');
+
+      if (msg.is_edited) {
+        const tag = document.createElement('div');
+        tag.className = 'edited-tag';
+        tag.textContent = '(edited)';
+        card.appendChild(tag);
+      }
+
+      // Actions
+      const canDelete = isOwn || myRole === 'admin';
+      const canEdit = myRole === 'admin';
+
+      if (canDelete || canEdit) {
+        const actions = document.createElement('div');
+        actions.className = 'msg-actions';
+        if (canEdit) {
+          const editBtn = document.createElement('button');
+          editBtn.className = 'action-btn edit';
+          editBtn.textContent = '✏️ Edit';
+          editBtn.onclick = () => openEditModal(msg.id, msg.message);
+          actions.appendChild(editBtn);
+        }
+        if (canDelete) {
+          const delBtn = document.createElement('button');
+          delBtn.className = 'action-btn delete';
+          delBtn.textContent = '🗑️ Delete';
+          delBtn.onclick = () => deleteMessage(msg.id);
+          actions.appendChild(delBtn);
+        }
+        wrapper.appendChild(meta);
+        wrapper.appendChild(card);
+        wrapper.appendChild(actions);
+      } else {
+        wrapper.appendChild(meta);
+        wrapper.appendChild(card);
+      }
+
+      container.appendChild(wrapper);
+      scrollToBottom();
+    }
+
+    function appendSystemMessage(text) {
+      const container = document.getElementById('messagesContainer');
+      const wrapper = document.createElement('div');
+      wrapper.className = 'msg-wrapper system-wrapper';
+      const card = document.createElement('div');
+      card.className = 'msg-card system-card';
+      card.textContent = text;
+      wrapper.appendChild(card);
+      container.appendChild(wrapper);
+      scrollToBottom();
+    }
+
+    function removeMessage(msgId) {
+      const el = document.querySelector(`[data-id="${msgId}"]`);
+      if (el) {
+        el.style.transition = 'opacity 0.3s, transform 0.3s';
+        el.style.opacity = '0';
+        el.style.transform = 'scale(0.95)';
+        setTimeout(() => el.remove(), 300);
+      }
+    }
+
+    function updateMessage(msg) {
+      const el = document.querySelector(`[data-id="${msg.id}"]`);
+      if (!el) return;
+      const card = el.querySelector('.msg-card');
+      if (card) {
+        card.innerHTML = escHtml(msg.message).replace(/\n/g, '<br>');
+        if (msg.is_edited) {
+          let editedTag = card.querySelector('.edited-tag');
+          if (!editedTag) {
+            editedTag = document.createElement('div');
+            editedTag.className = 'edited-tag';
+            editedTag.textContent = '(edited)';
+            card.appendChild(editedTag);
+          }
+        }
+      }
+    }
+
+    // ─── Delete ───────────────────────────────────────────────────────
+    async function deleteMessage(msgId) {
+      if (!wsToken) return showToast('❌ Guests cannot delete messages');
+      try {
+        const res = await fetch(`/messages/${msgId}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${wsToken}` },
+        });
+        if (!res.ok) {
+          const d = await res.json();
+          showToast('❌ ' + (d.detail || 'Could not delete'));
+        }
+      } catch (e) { showToast('❌ Network error'); }
+    }
+
+    // ─── Edit Modal ───────────────────────────────────────────────────
+    function openEditModal(msgId, currentText) {
+      editingMsgId = msgId;
+      document.getElementById('editTextarea').value = currentText;
+      document.getElementById('editModal').classList.add('open');
+      document.getElementById('editTextarea').focus();
+    }
+
+    document.getElementById('editCancelBtn').addEventListener('click', () => {
+      document.getElementById('editModal').classList.remove('open');
+      editingMsgId = null;
+    });
+
+    document.getElementById('editModal').addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) {
+        document.getElementById('editModal').classList.remove('open');
+        editingMsgId = null;
+      }
+    });
+
+    document.getElementById('editSaveBtn').addEventListener('click', async () => {
+      if (!editingMsgId || !wsToken) return;
+      const text = document.getElementById('editTextarea').value.trim();
+      if (!text) return;
+      try {
+        const res = await fetch(`/messages/${editingMsgId}`, {
+          method: 'PATCH',
+          headers: {
+            'Authorization': `Bearer ${wsToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ message: text }),
+        });
+        if (!res.ok) {
+          const d = await res.json();
+          showToast('❌ ' + (d.detail || 'Edit failed'));
+        } else {
+          document.getElementById('editModal').classList.remove('open');
+          editingMsgId = null;
+          showToast('✅ Message edited');
+        }
+      } catch (e) { showToast('❌ Network error'); }
+    });
+
+    // ─── Send Message ─────────────────────────────────────────────────
+    function setupEventListeners() {
+      const input = document.getElementById('messageInput');
+      const sendBtn = document.getElementById('sendBtn');
+
+      sendBtn.addEventListener('click', sendMessage);
+
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          sendMessage();
+        }
+      });
+
+      input.addEventListener('input', () => {
+        // Auto-resize
+        input.style.height = 'auto';
+        input.style.height = Math.min(input.scrollHeight, 100) + 'px';
+        // Typing event
+        if (!isTyping) {
+          isTyping = true;
+          sendWS({ type: 'typing' });
+        }
+        clearTimeout(typingTimer);
+        typingTimer = setTimeout(() => { isTyping = false; }, 2000);
+      });
+    }
+
+    function sendMessage() {
+      const input = document.getElementById('messageInput');
+      const text = input.value.trim();
+      if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+      sendWS({ type: 'message', message: text });
+      input.value = '';
+      input.style.height = 'auto';
+    }
+
+    function sendWS(data) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(data));
+      }
+    }
+
+    // ─── Typing Indicator ─────────────────────────────────────────────
+
+    function showTyping(username) {
+      typingSet.add(username);
+      clearTimeout(typingClearTimers[username]);
+      typingClearTimers[username] = setTimeout(() => {
+        typingSet.delete(username);
+        renderTyping();
+      }, 3000);
+      renderTyping();
+    }
+
+    function renderTyping() {
+      const el = document.getElementById('typingIndicator');
+      const names = [...typingSet];
+      if (names.length === 0) {
+        el.textContent = '';
+      } else if (names.length === 1) {
+        el.textContent = `${names[0]} is typing…`;
+      } else {
+        el.textContent = `${names.slice(0, -1).join(', ')} and ${names.at(-1)} are typing…`;
+      }
+    }
+
+    // ─── Online Users ─────────────────────────────────────────────────
+    function renderUserList(users) {
+      const list = document.getElementById('userList');
+      const count = document.getElementById('onlineCount');
+      count.textContent = `${users.length} online`;
+      list.innerHTML = '';
+      if (users.length === 0) {
+        list.innerHTML = '<li class="user-list-item" style="color:var(--text-muted);font-size:0.78rem;">No users yet…</li>';
+        return;
+      }
+      users.forEach(u => {
+        const li = document.createElement('li');
+        li.className = 'user-list-item';
+        const avClass = u.role === 'admin' ? 'user-avatar admin-av' : 'user-avatar';
+        li.innerHTML = `
+      <div class="${avClass}">${u.username.charAt(0).toUpperCase()}</div>
+      <span>${escHtml(u.username)}</span>
+    `;
+        list.appendChild(li);
+      });
+    }
+
+    // ─── Emoji Picker ─────────────────────────────────────────────────
+    function buildEmojiPicker() {
+      const picker = document.getElementById('emojiPicker');
+      EMOJIS.forEach(emoji => {
+        const span = document.createElement('span');
+        span.className = 'emoji-item';
+        span.textContent = emoji;
+        span.addEventListener('click', () => {
+          const input = document.getElementById('messageInput');
+          const pos = input.selectionStart;
+          const val = input.value;
+          input.value = val.slice(0, pos) + emoji + val.slice(pos);
+          input.selectionStart = input.selectionEnd = pos + emoji.length;
+          input.focus();
+        });
+        picker.appendChild(span);
+      });
+    }
+
+    document.getElementById('emojiToggle').addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.getElementById('emojiPicker').classList.toggle('open');
+    });
+
+    document.addEventListener('click', () => {
+      document.getElementById('emojiPicker').classList.remove('open');
+    });
+
+    // ─── Notification Sound ───────────────────────────────────────────
+    function playNotification() {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.15);
+        gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.25);
+        osc.start(audioCtx.currentTime);
+        osc.stop(audioCtx.currentTime + 0.25);
+      } catch (e) { /* silently ignore */ }
+    }
+
+    // ─── Toast ────────────────────────────────────────────────────────
+    function showToast(msg, duration = 3000) {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = 'toast';
+      toast.textContent = msg;
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.transition = 'opacity 0.4s';
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 400);
+      }, duration);
+    }
+
+    // ─── Helpers ──────────────────────────────────────────────────────
+    function escHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function formatTime(isoStr) {
+      try {
+        const d = new Date(isoStr);
+        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      } catch (e) { return ''; }
+    }
+
+    function scrollToBottom() {
+      const c = document.getElementById('messagesContainer');
+      c.scrollTop = c.scrollHeight;
+    }
+  </script>
+</body>
+
+</html>
